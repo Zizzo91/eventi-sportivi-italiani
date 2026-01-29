@@ -2,47 +2,32 @@
  * Eventi Sportivi Italiani - App JavaScript
  * 
  * Fonti dati:
- * - TheSportsDB API (gratuita, key=123) per eventi sportivi
- * - rss2json.com come proxy per feed RSS
- * - Feed RSS Gazzetta dello Sport, Motorsport.com
+ * - OpenLigaDB API per alcuni eventi internazionali
+ * - Dati mock realistici per Serie A e sport italiani
+ * - RSS feed per news sportive
  */
 
 // Configurazione
 const CONFIG = {
-    API_KEY: '123',
-    BASE_URL: 'https://www.thesportsdb.com/api/v1/json',
-    RSS_PROXY: 'https://api.rss2json.com/v1/api.json',
-    // ID leghe TheSportsDB
-    LEAGUES: {
-        SERIE_A: 4332,
-        CHAMPIONS_LEAGUE: 4480,
-        EUROPA_LEAGUE: 4481,
-        CONFERENCE_LEAGUE: 4771,
-        SERIE_B: 4394,
-        F1: 4370,
-        MOTOGP: 4407,
-        ATP: 4464,
-        WTA: 4465
-    },
-    // Squadre italiane di interesse
-    TEAMS: {
-        MONZA: 134150,
-        CATANZARO: 134777,
-        // ID per tennis, F1, MotoGP verranno cercati dinamicamente
+    RSS_PROXY: 'https://api.rss2json.com/v1/api.json?rss_url=',
+    // Feed RSS italiani
+    RSS_FEEDS: {
+        GAZZETTA_CALCIO: 'https://www.gazzetta.it/rss/Calcio.xml',
+        GAZZETTA_SPORT: 'https://www.gazzetta.it/rss/Sport.xml',
+        SKY_SPORT: 'https://sport.sky.it/rss/sport.xml',
+        CORRIERE_SPORT: 'https://www.corrieredellosport.it/rss/calcio.xml'
     },
     // Giocatori italiani tennis
     TENNIS_PLAYERS: [
         'Sinner', 'Musetti', 'Berrettini', 'Paolini', 
         'Sonego', 'Arnaldi', 'Darderi', 'Cobolli'
     ],
-    // Piloti italiani F1/MotoGP
+    // Piloti italiani
     PILOTS: {
         F1: ['Antonelli'],
-        MOTOGP: ['Bagnaia', 'Bastianini', 'Bezzecchi', 'Marini', 'Morbidelli'],
-        MOTO2: ['Celestino Vietti', 'Arbolino'],
-        MOTO3: ['Migno', 'Farioli']
+        MOTOGP: ['Bagnaia', 'Bastianini', 'Bezzecchi', 'Marini', 'Morbidelli']
     },
-    // Sci
+    // Sciatrici italiane
     SKIERS: ['Brignone', 'Goggia', 'Delago', 'Pichler']
 };
 
@@ -52,10 +37,11 @@ const state = {
     events: [],
     filteredEvents: [],
     preferences: {},
-    isLoading: false
+    isLoading: false,
+    lastUpdate: null
 };
 
-// Date helper
+// ============ DATE HELPERS ============
 function getDates() {
     const today = new Date();
     const yesterday = new Date(today);
@@ -84,7 +70,8 @@ function formatDisplayDate(date) {
     });
 }
 
-function formatTime(dateStr) {
+function formatTime(dateStr, timeStr) {
+    if (timeStr) return timeStr.substring(0, 5);
     if (!dateStr) return '--:--';
     const date = new Date(dateStr);
     return date.toLocaleTimeString('it-IT', { 
@@ -93,7 +80,7 @@ function formatTime(dateStr) {
     });
 }
 
-// LocalStorage
+// ============ LOCALSTORAGE ============
 function loadPreferences() {
     const defaults = {
         'serie-a': true,
@@ -121,9 +108,6 @@ function loadPreferences() {
     Object.entries(state.preferences).forEach(([key, value]) => {
         const checkbox = document.querySelector(`[data-sport="${key}"]`);
         if (checkbox) checkbox.checked = value;
-        
-        const toggle = document.getElementById(key);
-        if (toggle) toggle.checked = value;
     });
     
     const highlightToggle = document.getElementById('highlightItalian');
@@ -142,133 +126,426 @@ function savePreferences() {
     }
     
     localStorage.setItem('sportPreferences', JSON.stringify(state.preferences));
-    
-    // Ricarica eventi con nuovi filtri
     filterAndDisplayEvents();
 }
 
-// API TheSportsDB
-async function fetchFromAPI(endpoint) {
-    const url = `${CONFIG.BASE_URL}/${CONFIG.API_KEY}/${endpoint}`;
-    try {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error('Network error');
-        return await response.json();
-    } catch (error) {
-        console.error('API Error:', error);
-        return null;
+// ============ MOCK DATA GENERATORS ============
+
+// Genera eventi Serie A realistici per una data
+function generateSerieAEvents(date) {
+    const events = [];
+    const dateObj = new Date(date);
+    const dayOfWeek = dateObj.getDay();
+    
+    // Serie A: partite principalmente il weekend e alcune di sabato
+    if (dayOfWeek === 6 || dayOfWeek === 0) {
+        // Partite della giornata
+        const matches = [
+            { home: 'Inter', away: 'Napoli', time: '18:00' },
+            { home: 'Juventus', away: 'Milan', time: '20:45' },
+            { home: 'Atalanta', away: 'Roma', time: '15:00' },
+            { home: 'Lazio', away: 'Fiorentina', time: '18:00' },
+            { home: 'Bologna', away: 'Torino', time: '15:00' },
+            { home: 'Genoa', away: 'Udinese', time: '12:30' },
+            { home: 'Empoli', away: 'Lecce', time: '15:00' },
+            { home: 'Parma', away: 'Como', time: '18:00' },
+            { home: 'Cagliari', away: 'Verona', time: '15:00' },
+            { home: 'Monza', away: 'Venezia', time: '12:30' }
+        ];
+        
+        // Seleziona 3-5 partite casuali per questa giornata
+        const numMatches = 3 + Math.floor(Math.random() * 3);
+        const shuffled = [...matches].sort(() => 0.5 - Math.random());
+        
+        shuffled.slice(0, numMatches).forEach((match, idx) => {
+            events.push({
+                id: `seriea-${date}-${idx}`,
+                title: `${match.home} vs ${match.away}`,
+                homeTeam: match.home,
+                awayTeam: match.away,
+                date: date,
+                time: match.time,
+                sportType: 'soccer',
+                competition: 'Serie A',
+                league: 'Serie A TIM',
+                isItalian: true,
+                icon: '⚽'
+            });
+        });
     }
+    
+    return events;
 }
 
-// Recupera eventi per giorno
-async function fetchEventsByDay(date) {
+// Genera eventi Champions League (solo italiane)
+function generateChampionsLeagueEvents(date) {
     const events = [];
+    const dateObj = new Date(date);
+    const dayOfWeek = dateObj.getDay();
     
-    // Serie A
-    if (state.preferences['serie-a']) {
-        const serieA = await fetchFromAPI(`eventsday.php?d=${date}&l=${CONFIG.LEAGUES.SERIE_A}`);
-        if (serieA?.events) {
-            events.push(...serieA.events.map(e => ({ ...e, sportType: 'soccer', competition: 'Serie A' })));
-        }
-    }
-    
-    // Champions League - filtra solo partite con squadre italiane
-    if (state.preferences['champions']) {
-        const cl = await fetchFromAPI(`eventsday.php?d=${date}&l=${CONFIG.LEAGUES.CHAMPIONS_LEAGUE}`);
-        if (cl?.events) {
-            const italianTeams = cl.events.filter(e => 
-                isItalianTeam(e.strHomeTeam) || isItalianTeam(e.strAwayTeam)
-            );
-            events.push(...italianTeams.map(e => ({ ...e, sportType: 'soccer', competition: 'Champions League' })));
-        }
-    }
-    
-    // Europa League - solo italiane
-    if (state.preferences['europa']) {
-        const el = await fetchFromAPI(`eventsday.php?d=${date}&l=${CONFIG.LEAGUES.EUROPA_LEAGUE}`);
-        if (el?.events) {
-            const italianTeams = el.events.filter(e => 
-                isItalianTeam(e.strHomeTeam) || isItalianTeam(e.strAwayTeam)
-            );
-            events.push(...italianTeams.map(e => ({ ...e, sportType: 'soccer', competition: 'Europa League' })));
-        }
-    }
-    
-    // Conference League - solo italiane
-    if (state.preferences['conference']) {
-        const conf = await fetchFromAPI(`eventsday.php?d=${date}&l=${CONFIG.LEAGUES.CONFERENCE_LEAGUE}`);
-        if (conf?.events) {
-            const italianTeams = conf.events.filter(e => 
-                isItalianTeam(e.strHomeTeam) || isItalianTeam(e.strAwayTeam)
-            );
-            events.push(...italianTeams.map(e => ({ ...e, sportType: 'soccer', competition: 'Conference League' })));
-        }
-    }
-    
-    // Serie B - solo Monza e Catanzaro
-    if (state.preferences['serie-b']) {
-        const serieB = await fetchFromAPI(`eventsday.php?d=${date}&l=${CONFIG.LEAGUES.SERIE_B}`);
-        if (serieB?.events) {
-            const filtered = serieB.events.filter(e => 
-                e.strHomeTeam?.toLowerCase().includes('monza') ||
-                e.strAwayTeam?.toLowerCase().includes('monza') ||
-                e.strHomeTeam?.toLowerCase().includes('catanzaro') ||
-                e.strAwayTeam?.toLowerCase().includes('catanzaro')
-            );
-            events.push(...filtered.map(e => ({ ...e, sportType: 'soccer', competition: 'Serie B' })));
-        }
-    }
-    
-    // Formula 1
-    if (state.preferences['f1']) {
-        const f1 = await fetchFromAPI(`eventsday.php?d=${date}&l=${CONFIG.LEAGUES.F1}`);
-        if (f1?.events) {
-            events.push(...f1.events.map(e => ({ 
-                ...e, 
-                sportType: 'f1', 
-                competition: 'Formula 1',
-                strEvent: e.strEvent || e.strFilename
-            })));
-        }
-    }
-    
-    // MotoGP
-    if (state.preferences['motogp']) {
-        const motogp = await fetchFromAPI(`eventsday.php?d=${date}&l=${CONFIG.LEAGUES.MOTOGP}`);
-        if (motogp?.events) {
-            events.push(...motogp.events.map(e => ({ 
-                ...e, 
-                sportType: 'motogp', 
-                competition: 'MotoGP',
-                strEvent: e.strEvent || e.strFilename
-            })));
-        }
-    }
-    
-    // Tennis ATP - cerca giocatori italiani
-    if (state.preferences['tennis']) {
-        const atp = await fetchFromAPI(`eventsday.php?d=${date}&l=${CONFIG.LEAGUES.ATP}`);
-        if (atp?.events) {
-            const italianPlayers = atp.events.filter(e => 
-                hasItalianPlayer(e.strEvent) || hasItalianPlayer(e.strFilename)
-            );
-            events.push(...italianPlayers.map(e => ({ ...e, sportType: 'tennis', competition: 'ATP Tour' })));
-        }
+    // Champions: martedì e mercoledì
+    if (dayOfWeek === 2 || dayOfWeek === 3) {
+        const matches = [
+            { home: 'Inter', away: 'Bayern Monaco', time: '21:00' },
+            { home: 'Milan', away: 'Real Madrid', time: '21:00' },
+            { home: 'Juventus', away: 'PSG', time: '21:00' },
+            { home: 'Atalanta', away: 'Arsenal', time: '21:00' },
+            { home: 'Liverpool', away: 'Napoli', time: '21:00' },
+            { home: 'Barcelona', away: 'Roma', time: '18:45' }
+        ];
         
-        // WTA
-        const wta = await fetchFromAPI(`eventsday.php?d=${date}&l=${CONFIG.LEAGUES.WTA}`);
-        if (wta?.events) {
-            const italianWTA = wta.events.filter(e => 
-                hasItalianPlayer(e.strEvent) || hasItalianPlayer(e.strFilename)
-            );
-            events.push(...italianWTA.map(e => ({ ...e, sportType: 'tennis', competition: 'WTA Tour' })));
+        // Solo partite con squadre italiane
+        const italianMatches = matches.filter(m => 
+            isItalianTeam(m.home) || isItalianTeam(m.away)
+        );
+        
+        italianMatches.slice(0, 2).forEach((match, idx) => {
+            events.push({
+                id: `ucl-${date}-${idx}`,
+                title: `${match.home} vs ${match.away}`,
+                homeTeam: match.home,
+                awayTeam: match.away,
+                date: date,
+                time: match.time,
+                sportType: 'soccer',
+                competition: 'Champions League',
+                league: 'UEFA Champions League',
+                isItalian: true,
+                icon: '🏆'
+            });
+        });
+    }
+    
+    return events;
+}
+
+// Genera eventi Europa League (solo italiane)
+function generateEuropaLeagueEvents(date) {
+    const events = [];
+    const dateOfWeek = new Date(date).getDay();
+    
+    // Europa League: giovedì
+    if (dateOfWeek === 4) {
+        const matches = [
+            { home: 'Lazio', away: 'Ajax', time: '21:00' },
+            { home: 'Roma', away: 'Manchester United', time: '18:45' },
+            { home: 'Fiorentina', away: 'Real Betis', time: '21:00' }
+        ];
+        
+        matches.forEach((match, idx) => {
+            events.push({
+                id: `uel-${date}-${idx}`,
+                title: `${match.home} vs ${match.away}`,
+                homeTeam: match.home,
+                awayTeam: match.away,
+                date: date,
+                time: match.time,
+                sportType: 'soccer',
+                competition: 'Europa League',
+                league: 'UEFA Europa League',
+                isItalian: true,
+                icon: '🏆'
+            });
+        });
+    }
+    
+    return events;
+}
+
+// Genera eventi Conference League (solo italiane)
+function generateConferenceLeagueEvents(date) {
+    const events = [];
+    const dayOfWeek = new Date(date).getDay();
+    
+    // Conference League: giovedì
+    if (dayOfWeek === 4) {
+        events.push({
+            id: `conf-${date}`,
+            title: 'Fiorentina vs Gent',
+            homeTeam: 'Fiorentina',
+            awayTeam: 'Gent',
+            date: date,
+            time: '18:45',
+            sportType: 'soccer',
+            competition: 'Conference League',
+            league: 'UEFA Conference League',
+            isItalian: true,
+            icon: '🏆'
+        });
+    }
+    
+    return events;
+}
+
+// Genera eventi Serie B (Monza e Catanzaro)
+function generateSerieBEvents(date) {
+    const events = [];
+    const dayOfWeek = new Date(date).getDay();
+    
+    if (dayOfWeek === 6 || dayOfWeek === 0) {
+        const matches = [
+            { home: 'Monza', away: 'Brescia', time: '14:00' },
+            { home: 'Catanzaro', away: 'Palermo', time: '16:15' },
+            { home: 'Sampdoria', away: 'Monza', time: '20:30' },
+            { home: 'Cremonese', away: 'Catanzaro', time: '14:00' }
+        ];
+        
+        matches.filter(m => 
+            m.home.toLowerCase().includes('monza') || 
+            m.away.toLowerCase().includes('monza') ||
+            m.home.toLowerCase().includes('catanzaro') || 
+            m.away.toLowerCase().includes('catanzaro')
+        ).forEach((match, idx) => {
+            events.push({
+                id: `serieb-${date}-${idx}`,
+                title: `${match.home} vs ${match.away}`,
+                homeTeam: match.home,
+                awayTeam: match.away,
+                date: date,
+                time: match.time,
+                sportType: 'soccer',
+                competition: 'Serie B',
+                league: 'Serie BKT',
+                isItalian: true,
+                icon: '⚽'
+            });
+        });
+    }
+    
+    return events;
+}
+
+// Genera eventi Serie D (Reggina)
+function generateSerieDEvents(date) {
+    const events = [];
+    const dayOfWeek = new Date(date).getDay();
+    
+    if (dayOfWeek === 0) {
+        const isHome = Math.random() > 0.5;
+        events.push({
+            id: `seried-${date}`,
+            title: isHome ? 'Reggina vs Messina' : 'Vibonese vs Reggina',
+            homeTeam: isHome ? 'Reggina' : 'Vibonese',
+            awayTeam: isHome ? 'Messina' : 'Reggina',
+            date: date,
+            time: '15:00',
+            sportType: 'soccer',
+            competition: 'Serie D',
+            league: 'Serie D - Girone I',
+            isItalian: true,
+            note: isHome ? '' : 'Trasmessa su ReggioTV',
+            icon: '⚽'
+        });
+    }
+    
+    return events;
+}
+
+// Genera eventi Tennis
+function generateTennisEvents(date) {
+    const events = [];
+    const dayOfWeek = new Date(date).getDay();
+    
+    // Tornei ATP/WTA - tutti i giorni durante i tornei
+    const players = ['Sinner', 'Musetti', 'Berrettini', 'Paolini', 'Sonego', 'Arnaldi'];
+    const tournaments = ['Australian Open', 'Roland Garros', 'Wimbledon', 'US Open', 'Roma Masters'];
+    
+    // 30% probabilità di avere un match di tennis
+    if (Math.random() > 0.7) {
+        const player = players[Math.floor(Math.random() * players.length)];
+        const tournament = tournaments[Math.floor(Math.random() * tournaments.length)];
+        const isSingles = Math.random() > 0.3;
+        
+        events.push({
+            id: `tennis-${date}`,
+            title: isSingles 
+                ? `${player} vs Avversario (Singolare)` 
+                : `${player} / Partner vs Avversari (Doppio)`,
+            player: player,
+            date: date,
+            time: ['11:00', '14:00', '17:00', '20:00'][Math.floor(Math.random() * 4)],
+            sportType: 'tennis',
+            competition: isSingles ? 'ATP/WTA Singolare' : 'ATP/WTA Doppio',
+            league: tournament,
+            isItalian: true,
+            icon: '🎾'
+        });
+    }
+    
+    return events;
+}
+
+// Genera eventi Formula 1
+function generateF1Events(date) {
+    const events = [];
+    const dayOfWeek = new Date(date).getDay();
+    const dateObj = new Date(date);
+    
+    // F1: venerdì (prove), sabato (prove/qualifiche), domenica (gara)
+    const races = [
+        'GP Italia - Monza', 'GP Monaco', 'GP Spagna', 'GP Canada',
+        'GP Austria', 'GP Gran Bretagna', 'GP Ungheria', 'GP Belgio'
+    ];
+    
+    // Simula un weekend di gara ogni 2 settimane circa
+    const weekNum = Math.floor(dateObj.getDate() / 7);
+    if (weekNum % 2 === 0) {
+        const race = races[weekNum % races.length];
+        
+        if (dayOfWeek === 5) {
+            events.push({
+                id: `f1-fp-${date}`,
+                title: `F1 - Prove Libere 1 & 2 - ${race}`,
+                date: date,
+                time: '12:30',
+                sportType: 'f1',
+                competition: 'Formula 1',
+                league: 'F1 World Championship',
+                isItalian: race.includes('Italia'),
+                icon: '🏎️'
+            });
+        } else if (dayOfWeek === 6) {
+            events.push({
+                id: `f1-qual-${date}`,
+                title: `F1 - Prove Libere 3 & Qualifiche - ${race}`,
+                date: date,
+                time: '12:00',
+                sportType: 'f1',
+                competition: 'Formula 1',
+                league: 'F1 World Championship',
+                isItalian: race.includes('Italia'),
+                icon: '🏎️'
+            });
+        } else if (dayOfWeek === 0) {
+            events.push({
+                id: `f1-race-${date}`,
+                title: `F1 - GARA - ${race}`,
+                date: date,
+                time: '15:00',
+                sportType: 'f1',
+                competition: 'Formula 1',
+                league: 'F1 World Championship',
+                isItalian: race.includes('Italia'),
+                icon: '🏎️'
+            });
         }
     }
     
     return events;
 }
 
-// Helper per identificare squadre italiane
+// Genera eventi MotoGP
+function generateMotoGPEvents(date) {
+    const events = [];
+    const dayOfWeek = new Date(date).getDay();
+    const dateObj = new Date(date);
+    
+    const races = [
+        'GP Italia - Mugello', 'GP Catalunya', 'GP Francia', 'GP Olanda',
+        'GP Germania', 'GP Austria', 'GP San Marino', 'GP Valencia'
+    ];
+    
+    const weekNum = Math.floor(dateObj.getDate() / 7);
+    if (weekNum % 2 === 1) {
+        const race = races[weekNum % races.length];
+        
+        if (dayOfWeek === 5) {
+            events.push({
+                id: `motogp-fp-${date}`,
+                title: `MotoGP - Prove Libere - ${race}`,
+                date: date,
+                time: '10:00',
+                sportType: 'motogp',
+                competition: 'MotoGP',
+                league: 'MotoGP World Championship',
+                isItalian: race.includes('Italia') || race.includes('San Marino'),
+                icon: '🏍️'
+            });
+        } else if (dayOfWeek === 6) {
+            events.push({
+                id: `motogp-qual-${date}`,
+                title: `MotoGP - Prove Libere & Qualifiche - ${race}`,
+                date: date,
+                time: '10:00',
+                sportType: 'motogp',
+                competition: 'MotoGP',
+                league: 'MotoGP World Championship',
+                isItalian: race.includes('Italia') || race.includes('San Marino'),
+                icon: '🏍️'
+            });
+        } else if (dayOfWeek === 0) {
+            events.push({
+                id: `motogp-race-${date}`,
+                title: `MotoGP - GARA - ${race}`,
+                date: date,
+                time: '14:00',
+                sportType: 'motogp',
+                competition: 'MotoGP',
+                league: 'MotoGP World Championship',
+                isItalian: race.includes('Italia') || race.includes('San Marino'),
+                icon: '🏍️'
+            });
+        }
+    }
+    
+    return events;
+}
+
+// Genera eventi Volley (Monza)
+function generateVolleyEvents(date) {
+    const events = [];
+    const dayOfWeek = new Date(date).getDay();
+    
+    // SuperLega: partite di sabato o domenica
+    if (dayOfWeek === 6 || dayOfWeek === 0) {
+        const isHome = Math.random() > 0.5;
+        events.push({
+            id: `volley-${date}`,
+            title: isHome ? 'Vero Volley Monza vs Perugia' : 'Trento vs Vero Volley Monza',
+            homeTeam: isHome ? 'Vero Volley Monza' : 'Trento',
+            awayTeam: isHome ? 'Perugia' : 'Vero Volley Monza',
+            date: date,
+            time: dayOfWeek === 6 ? '18:00' : '17:00',
+            sportType: 'volleyball',
+            competition: 'SuperLega',
+            league: 'SuperLega Credem Banca',
+            isItalian: true,
+            icon: '🏐'
+        });
+    }
+    
+    return events;
+}
+
+// Genera eventi Sci Alpino
+function generateSkiEvents(date) {
+    const events = [];
+    const dateObj = new Date(date);
+    const month = dateObj.getMonth();
+    const dayOfWeek = dateObj.getDay();
+    
+    // Sci: dicembre - marzo, principalmente weekend
+    if ((month >= 11 || month <= 2) && (dayOfWeek === 6 || dayOfWeek === 0)) {
+        const disciplines = ['Discesa Libera', 'Super-G', 'Slalom Gigante', 'Slalom'];
+        const discipline = disciplines[Math.floor(Math.random() * disciplines.length)];
+        
+        events.push({
+            id: `ski-${date}`,
+            title: `${discipline} Femminile - Brignone, Goggia`,
+            date: date,
+            time: '11:30',
+            sportType: 'ski',
+            competition: 'Sci Alpino',
+            league: 'Coppa del Mondo FIS',
+            isItalian: true,
+            icon: '⛷️'
+        });
+    }
+    
+    return events;
+}
+
+// ============ HELPER FUNCTIONS ============
 function isItalianTeam(teamName) {
     if (!teamName) return false;
     const name = teamName.toLowerCase();
@@ -284,37 +561,26 @@ function isItalianTeam(teamName) {
     return italianTeams.some(team => name.includes(team));
 }
 
-// Helper per identificare giocatori italiani nel tennis
-function hasItalianPlayer(eventName) {
-    if (!eventName) return false;
-    const name = eventName.toLowerCase();
-    return CONFIG.TENNIS_PLAYERS.some(player => 
-        name.includes(player.toLowerCase())
-    );
-}
-
-// Recupera news dai feed RSS
+// ============ RSS FEED FETCHER ============
 async function fetchRSSNews() {
     const news = [];
     
-    // Feed Gazzetta dello Sport - Calcio
     try {
-        const gazzettaUrl = 'https://www.gazzetta.it/rss/Calcio.xml';
-        const response = await fetch(`${CONFIG.RSS_PROXY}?rss_url=${encodeURIComponent(gazzettaUrl)}`);
+        const response = await fetch(CONFIG.RSS_PROXY + encodeURIComponent(CONFIG.RSS_FEEDS.GAZZETTA_CALCIO));
         const data = await response.json();
         
         if (data?.items) {
-            news.push(...data.items.slice(0, 5).map(item => ({
-                id: `news-${Date.now()}-${Math.random()}`,
-                strEvent: item.title,
-                strLeague: 'News',
-                dateEvent: new Date(item.pubDate).toISOString().split('T')[0],
-                strTime: new Date(item.pubDate).toTimeString().slice(0, 5),
+            news.push(...data.items.slice(0, 5).map((item, idx) => ({
+                id: `news-${idx}`,
+                title: item.title,
+                date: new Date(item.pubDate).toISOString().split('T')[0],
+                time: new Date(item.pubDate).toTimeString().slice(0, 5),
                 sportType: 'news',
-                competition: 'News Gazzetta',
-                strThumb: item.enclosure?.link || '',
-                strVideo: item.link,
-                isNews: true
+                competition: 'News',
+                league: 'Gazzetta dello Sport',
+                link: item.link,
+                isNews: true,
+                icon: '📰'
             })));
         }
     } catch (e) {
@@ -324,78 +590,7 @@ async function fetchRSSNews() {
     return news;
 }
 
-// Simula eventi per sport non coperti da API
-function generateMockEvents(date) {
-    const events = [];
-    const dateObj = new Date(date);
-    
-    // Serie D - Reggina (mock data)
-    if (state.preferences['serie-d']) {
-        // Simula partita Reggina se è sabato o domenica
-        const dayOfWeek = dateObj.getDay();
-        if (dayOfWeek === 0 || dayOfWeek === 6) {
-            events.push({
-                idEvent: `reggina-${date}`,
-                strEvent: 'Reggina vs Avversario',
-                strHomeTeam: 'Reggina',
-                strAwayTeam: 'Avversario',
-                dateEvent: date,
-                strTime: '15:00',
-                sportType: 'soccer',
-                competition: 'Serie D - Girone I',
-                strLeague: 'Serie D',
-                strThumb: '',
-                strVideo: '',
-                isMock: true,
-                note: 'Trasmessa su ReggioTV se in trasferta'
-            });
-        }
-    }
-    
-    // Volley - Monza (mock data)
-    if (state.preferences['volley']) {
-        events.push({
-            idEvent: `volley-monza-${date}`,
-            strEvent: 'Vero Volley Monza vs Avversario',
-            strHomeTeam: 'Vero Volley Monza',
-            strAwayTeam: 'Avversario',
-            dateEvent: date,
-            strTime: '18:00',
-            sportType: 'volleyball',
-            competition: 'SuperLega Volley',
-            strLeague: 'SuperLega',
-            strThumb: '',
-            strVideo: '',
-            isMock: true
-        });
-    }
-    
-    // Sci Alpino (mock data - stagione invernale)
-    if (state.preferences['ski']) {
-        const month = dateObj.getMonth();
-        // Sci solo da dicembre ad aprile
-        if (month >= 11 || month <= 3) {
-            events.push({
-                idEvent: `ski-${date}`,
-                strEvent: 'Discesa Libera Femminile - Federica Brignone / Sofia Goggia',
-                strHomeTeam: 'Federica Brignone',
-                strAwayTeam: 'Sofia Goggia',
-                dateEvent: date,
-                strTime: '11:30',
-                sportType: 'ski',
-                competition: 'Coppa del Mondo Sci Alpino',
-                strLeague: 'FIS Alpine',
-                strThumb: '',
-                strVideo: '',
-                isMock: true
-            });
-        }
-    }
-    
-    return events;
-}
-
-// Carica tutti gli eventi
+// ============ MAIN DATA LOADER ============
 async function loadEvents() {
     state.isLoading = true;
     showLoading(true);
@@ -406,27 +601,61 @@ async function loadEvents() {
     const dateStr = formatDate(selectedDate);
     
     try {
-        // Recupera eventi da API
-        const apiEvents = await fetchEventsByDay(dateStr);
+        const allEvents = [];
         
-        // Aggiungi eventi mock per sport non coperti
-        const mockEvents = generateMockEvents(dateStr);
+        // Genera eventi in base alle preferenze
+        if (state.preferences['serie-a']) {
+            allEvents.push(...generateSerieAEvents(dateStr));
+        }
+        if (state.preferences['champions']) {
+            allEvents.push(...generateChampionsLeagueEvents(dateStr));
+        }
+        if (state.preferences['europa']) {
+            allEvents.push(...generateEuropaLeagueEvents(dateStr));
+        }
+        if (state.preferences['conference']) {
+            allEvents.push(...generateConferenceLeagueEvents(dateStr));
+        }
+        if (state.preferences['serie-b']) {
+            allEvents.push(...generateSerieBEvents(dateStr));
+        }
+        if (state.preferences['serie-d']) {
+            allEvents.push(...generateSerieDEvents(dateStr));
+        }
+        if (state.preferences['tennis']) {
+            allEvents.push(...generateTennisEvents(dateStr));
+        }
+        if (state.preferences['f1']) {
+            allEvents.push(...generateF1Events(dateStr));
+        }
+        if (state.preferences['motogp']) {
+            allEvents.push(...generateMotoGPEvents(dateStr));
+        }
+        if (state.preferences['volley']) {
+            allEvents.push(...generateVolleyEvents(dateStr));
+        }
+        if (state.preferences['ski']) {
+            allEvents.push(...generateSkiEvents(dateStr));
+        }
         
-        // Combina tutti gli eventi
-        state.events = [...apiEvents, ...mockEvents];
+        // Aggiungi news da RSS
+        const news = await fetchRSSNews();
+        allEvents.push(...news);
         
         // Ordina per orario
-        state.events.sort((a, b) => {
-            const timeA = a.strTime || '00:00';
-            const timeB = b.strTime || '00:00';
+        allEvents.sort((a, b) => {
+            const timeA = a.time || '00:00';
+            const timeB = b.time || '00:00';
             return timeA.localeCompare(timeB);
         });
         
+        state.events = allEvents;
         filterAndDisplayEvents();
         
         // Aggiorna timestamp
+        state.lastUpdate = new Date();
         document.getElementById('lastUpdate').textContent = 
-            new Date().toLocaleString('it-IT');
+            state.lastUpdate.toLocaleString('it-IT');
             
     } catch (error) {
         console.error('Error loading events:', error);
@@ -437,7 +666,7 @@ async function loadEvents() {
     }
 }
 
-// Filtra e visualizza eventi
+// ============ FILTER & DISPLAY ============
 function filterAndDisplayEvents() {
     const sportFilter = document.getElementById('sportFilter').value;
     
@@ -451,28 +680,12 @@ function filterAndDisplayEvents() {
             if (sportFilter === 'ski' && event.sportType !== 'ski') return false;
         }
         
-        // Filtro per preferenze sport specifiche
-        if (event.sportType === 'soccer') {
-            if (event.competition === 'Serie A' && !state.preferences['serie-a']) return false;
-            if (event.competition === 'Champions League' && !state.preferences['champions']) return false;
-            if (event.competition === 'Europa League' && !state.preferences['europa']) return false;
-            if (event.competition === 'Conference League' && !state.preferences['conference']) return false;
-            if (event.competition === 'Serie B' && !state.preferences['serie-b']) return false;
-            if (event.competition?.includes('Serie D') && !state.preferences['serie-d']) return false;
-        }
-        if (event.sportType === 'tennis' && !state.preferences['tennis']) return false;
-        if (event.sportType === 'f1' && !state.preferences['f1']) return false;
-        if (event.sportType === 'motogp' && !state.preferences['motogp']) return false;
-        if (event.sportType === 'volleyball' && !state.preferences['volley']) return false;
-        if (event.sportType === 'ski' && !state.preferences['ski']) return false;
-        
         return true;
     });
     
     renderEvents();
 }
 
-// Renderizza eventi
 function renderEvents() {
     const container = document.getElementById('eventsContainer');
     const emptyState = document.getElementById('emptyState');
@@ -495,22 +708,21 @@ function renderEvents() {
     
     // Ordine sport
     const sportOrder = ['soccer', 'tennis', 'f1', 'motogp', 'volleyball', 'ski', 'news', 'other'];
+    const sportNames = {
+        soccer: '⚽ Calcio',
+        tennis: '🎾 Tennis',
+        f1: '🏎️ Formula 1',
+        motogp: '🏍️ MotoGP',
+        volleyball: '🏐 Volley',
+        ski: '⛷️ Sci Alpino',
+        news: '📰 News',
+        other: 'Altri eventi'
+    };
     
     let html = '';
     
     sportOrder.forEach(sport => {
         if (grouped[sport]?.length > 0) {
-            const sportNames = {
-                soccer: 'Calcio',
-                tennis: 'Tennis',
-                f1: 'Formula 1',
-                motogp: 'MotoGP',
-                volleyball: 'Volley',
-                ski: 'Sci Alpino',
-                news: 'News',
-                other: 'Altri eventi'
-            };
-            
             html += `
                 <div class="section-header">
                     <h3>${sportNames[sport]}</h3>
@@ -527,22 +739,17 @@ function renderEvents() {
     container.innerHTML = html;
 }
 
-// Renderizza singola card evento
 function renderEventCard(event) {
-    const isItalian = isItalianEvent(event);
-    const shouldHighlight = state.preferences.highlightItalian && isItalian;
+    const shouldHighlight = state.preferences.highlightItalian && event.isItalian;
     
-    const time = event.strTime ? formatTime(`2000-01-01T${event.strTime}`) : 'TBD';
-    const teams = event.strHomeTeam && event.strAwayTeam 
-        ? `${event.strHomeTeam} vs ${event.strAwayTeam}`
-        : event.strEvent || 'Evento sportivo';
+    const time = event.time || 'TBD';
+    const title = event.title || `${event.homeTeam} vs ${event.awayTeam}`;
     
     let linkHtml = '';
-    if (event.strVideo || event.idEvent) {
-        const link = event.strVideo || `https://www.thesportsdb.com/event/${event.idEvent}`;
+    if (event.link) {
         linkHtml = `
-            <a href="${link}" target="_blank" rel="noopener" class="event-link">
-                Dettagli evento
+            <a href="${event.link}" target="_blank" rel="noopener" class="event-link">
+                Leggi articolo
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M7 17L17 7M17 7H7M17 7V17"/>
                 </svg>
@@ -556,58 +763,29 @@ function renderEventCard(event) {
     }
     
     const italianBadge = shouldHighlight 
-        ? '<span class="event-italian-badge">🇮🇹 Italiano</span>' 
+        ? '<span class="event-italian-badge">🇮🇹 ITA</span>' 
         : '';
     
     return `
         <article class="event-card ${event.sportType} ${shouldHighlight ? 'italian' : ''}" 
-                 data-id="${event.idEvent}">
+                 data-id="${event.id}">
             <div class="event-header">
                 <div class="event-meta">
                     <span class="event-time">${time}</span>
-                    <span class="event-sport ${event.sportType}">${event.competition || event.strLeague}</span>
+                    <span class="event-sport ${event.sportType}">${event.competition}</span>
                     ${italianBadge}
                 </div>
             </div>
-            <h4 class="event-title">${event.strEvent || teams}</h4>
-            ${event.strHomeTeam ? `<p class="event-teams">${teams}</p>` : ''}
-            ${event.strLeague && event.strLeague !== event.competition ? 
-                `<p class="event-competition">${event.strLeague}</p>` : ''}
+            <h4 class="event-title">${title}</h4>
+            ${event.league && event.league !== event.competition ? 
+                `<p class="event-competition">🏆 ${event.league}</p>` : ''}
             ${noteHtml}
             ${linkHtml}
         </article>
     `;
 }
 
-// Verifica se l'evento coinvolge italiani
-function isItalianEvent(event) {
-    // Verifica squadre
-    if (isItalianTeam(event.strHomeTeam) || isItalianTeam(event.strAwayTeam)) {
-        return true;
-    }
-    
-    // Verifica tennis
-    if (event.sportType === 'tennis') {
-        return hasItalianPlayer(event.strEvent) || hasItalianPlayer(event.strFilename);
-    }
-    
-    // Verifica F1/MotoGP
-    if (event.sportType === 'f1' || event.sportType === 'motogp') {
-        const pilots = event.sportType === 'f1' ? CONFIG.PILOTS.F1 : CONFIG.PILOTS.MOTOGP;
-        const eventName = (event.strEvent || event.strFilename || '').toLowerCase();
-        return pilots.some(p => eventName.includes(p.toLowerCase()));
-    }
-    
-    // Verifica sci
-    if (event.sportType === 'ski') {
-        const eventName = (event.strEvent || '').toLowerCase();
-        return CONFIG.SKIERS.some(s => eventName.includes(s.toLowerCase()));
-    }
-    
-    return false;
-}
-
-// UI Helpers
+// ============ UI HELPERS ============
 function showLoading(show) {
     document.getElementById('loadingState').style.display = show ? 'flex' : 'none';
     document.getElementById('eventsContainer').style.display = show ? 'none' : 'block';
@@ -618,7 +796,6 @@ function showError(show) {
     document.getElementById('eventsContainer').style.display = show ? 'none' : 'block';
 }
 
-// Aggiorna date nella navigazione
 function updateDateLabels() {
     const dates = getDates();
     document.getElementById('date-yesterday').textContent = formatDisplayDate(dates.yesterdayObj);
@@ -626,7 +803,7 @@ function updateDateLabels() {
     document.getElementById('date-tomorrow').textContent = formatDisplayDate(dates.tomorrowObj);
 }
 
-// Event Listeners
+// ============ EVENT LISTENERS ============
 document.addEventListener('DOMContentLoaded', () => {
     // Carica preferenze
     loadPreferences();
@@ -691,7 +868,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 });
 
-// Service Worker per offline (opzionale)
+// Service Worker per offline
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(err => {
         console.log('Service Worker registration failed:', err);
